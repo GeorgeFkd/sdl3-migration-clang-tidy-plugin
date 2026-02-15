@@ -2,9 +2,11 @@
 #include <clang-tidy/ClangTidyModule.h>
 #include <clang-tidy/ClangTidyModuleRegistry.h>
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/OperationKinds.h>
 #include <clang/ASTMatchers/ASTMatchFinder.h>
 #include <clang/ASTMatchers/ASTMatchers.h>
 #include <clang/Basic/SourceManager.h>
+#include <clang/Lex/Lexer.h>
 #include <clang/Lex/PPCallbacks.h>
 #include <clang/Lex/Preprocessor.h>
 #include <memory>
@@ -204,56 +206,52 @@ public:
 
   void registerMatchers(ast_matchers::MatchFinder *Finder) override {
 
+    Finder->addMatcher(
+        ifStmt(hasCondition(binaryOperator(
+                   hasOperatorName("=="),
+                   hasLHS(callExpr(callee(implicitCastExpr(
+                       hasCastKind(CK_FunctionToPointerDecay),
+                       hasSourceExpression(declRefExpr(
+                           to(functionDecl(matchesName("SDL_[A-Z].*"))))))))),
+                   hasRHS(unaryOperator(
+                       hasOperatorName("-"),
+                       hasUnaryOperand(integerLiteral(equals(1))))))))
+            .bind("sdl_error_check_minus_one"),
+        this);
 
     Finder->addMatcher(
-      ifStmt(
-        hasCondition(
-          binaryOperator(
-            hasOperatorName("=="),
-            hasLHS(
-              callExpr(
-                callee(
-                  implicitCastExpr(
-                    hasCastKind(CK_FunctionToPointerDecay),
-                    hasSourceExpression(
-                      declRefExpr(
-                        to(functionDecl(matchesName("SDL_[A-Z].*")))
-                      )
-                    )
-                  )
-                )
-              )
-            ),
-            hasRHS(
-              unaryOperator(
-                hasOperatorName("-"),
-                hasUnaryOperand(integerLiteral(equals(1)))
-              )
-            )
-          )
-        )
-      ).bind("sdl_error_check_minus_one"),
-      this);
+        ifStmt(hasCondition(binaryOperator(
+                   hasOperatorName("<"),
+                   hasLHS(callExpr(callee(implicitCastExpr(
+                       hasCastKind(CK_FunctionToPointerDecay),
+                       hasSourceExpression(declRefExpr(
+                           to(functionDecl(matchesName("SDL_[A-Z].*"))))))))),
+                   hasRHS(integerLiteral(equals(0))))))
+            .bind("sdl_error_check_negative"),
+        this);
 
-    // Finder->addMatcher(
-    //     ifStmt(hasCondition(binaryOperator(
-    //                hasOperatorName("=="),
-    //                hasLHS(callExpr(callee(declRefExpr(
-    //                    to(functionDecl(matchesName("^SDL_.*"))))))),
-    //                hasRHS(unaryOperator(
-    //                    hasOperatorName("-"),
-    //                    hasUnaryOperand(integerLiteral(equals(1))))))))
-    //         .bind("sdl_check_result_minus_one"),
-    //     this);
+    Finder->addMatcher(
+        ifStmt(hasCondition(binaryOperator(
+                   hasOperatorName("=="),
+                   hasLHS(callExpr(callee(implicitCastExpr(
+                       hasCastKind(CK_FunctionToPointerDecay),
+                       hasSourceExpression(declRefExpr(
+                           to(functionDecl(matchesName("SDL_[A-Z].*"))))))))),
+                   hasRHS(integerLiteral(equals(0))))))
+            .bind("sdl_error_check_zero"),
+        this);
 
-    // Finder->addMatcher(
-    //     ifStmt(hasCondition(binaryOperator(
-    //         hasOperatorName("=="),
-    //         hasLHS(callExpr(callee(declRefExpr(to(functionDecl(matchesName("^SDL_.*"))))))),
-    //         hasRHS(
-    //             unaryOperator(hasOperatorName("-"),
-    //                           hasUnaryOperand(integerLiteral(equals(1)))))))).bind("sdl_check_result_minus_one"),
-    //     this);
+    Finder->addMatcher(
+        ifStmt(hasCondition(unaryOperator(
+                   hasOperatorName("!"),
+                   hasUnaryOperand(implicitCastExpr(
+                       hasCastKind(CK_IntegralToBoolean),
+                       hasSourceExpression(callExpr(callee(implicitCastExpr(
+                           hasCastKind(CK_FunctionToPointerDecay),
+                           hasSourceExpression(declRefExpr(to(functionDecl(
+                               matchesName("SDL_[A-Z].*"))))))))))))))
+            .bind("sdl_error_check_negation"),
+        this);
 
     for (const auto &Migration : FunctionRenames) {
       Finder->addMatcher(callExpr(callee(functionDecl(hasName(Migration[0]))))
@@ -284,10 +282,102 @@ public:
 
     if (const auto *SdlResultCheckFound =
             Result.Nodes.getNodeAs<IfStmt>("sdl_error_check_minus_one")) {
-      diag(SdlResultCheckFound->getIfLoc(),
-           "SDL3 functions that previously returned a negative error now return bool.");
-    }else {
-      llvm::outs() << "Did not find an SDL Check result minus one error\n";
+
+      const auto *Condition = SdlResultCheckFound->getCond();
+      const auto *BinOp = dyn_cast<BinaryOperator>(Condition);
+
+      if (BinOp) {
+        const auto *Call =
+            dyn_cast<CallExpr>(BinOp->getLHS()->IgnoreParenImpCasts());
+        if (Call) {
+          std::string CallText =
+              Lexer::getSourceText(
+                  CharSourceRange::getTokenRange(Call->getSourceRange()),
+                  *Result.SourceManager, Result.Context->getLangOpts())
+                  .str();
+
+          diag(SdlResultCheckFound->getIfLoc(),
+               "SDL3 functions that previously returned a negative error now "
+               "return bool. remove the == -1 part and add a negation to "
+               "indicate failure")
+              << FixItHint::CreateReplacement(Condition->getSourceRange(),
+                                              "!" + CallText);
+        }
+      }
+    }
+
+    if (const auto *SdlResultCheckFound =
+            Result.Nodes.getNodeAs<IfStmt>("sdl_error_check_negative")) {
+      const auto *Condition = SdlResultCheckFound->getCond();
+      const auto *BinOp = dyn_cast<BinaryOperator>(Condition);
+
+      if (BinOp) {
+        const auto *Call =
+            dyn_cast<CallExpr>(BinOp->getLHS()->IgnoreParenImpCasts());
+        if (Call) {
+          std::string CallText =
+              Lexer::getSourceText(
+                  CharSourceRange::getTokenRange(Call->getSourceRange()),
+                  *Result.SourceManager, Result.Context->getLangOpts())
+                  .str();
+
+          diag(SdlResultCheckFound->getIfLoc(),
+               "SDL3 functions that previously returned a negative error now "
+               "return bool. remove the < 0 and add a negation to indicate "
+               "failure")
+              << FixItHint::CreateReplacement(Condition->getSourceRange(),
+                                              "!" + CallText);
+        }
+      }
+    }
+
+    if (const auto *SdlResultCheckFound =
+            Result.Nodes.getNodeAs<IfStmt>("sdl_error_check_zero")) {
+      const auto *Condition = SdlResultCheckFound->getCond();
+      const auto *BinOp = dyn_cast<BinaryOperator>(Condition);
+
+      if (BinOp) {
+        const auto *Call =
+            dyn_cast<CallExpr>(BinOp->getLHS()->IgnoreParenImpCasts());
+        if (Call) {
+          std::string CallText =
+              Lexer::getSourceText(
+                  CharSourceRange::getTokenRange(Call->getSourceRange()),
+                  *Result.SourceManager, Result.Context->getLangOpts())
+                  .str();
+
+          diag(SdlResultCheckFound->getIfLoc(),
+               "SDL3 functions that previously returned 0 for success now "
+               "return bool. remove the == 0 part for the success branch")
+              << FixItHint::CreateReplacement(Condition->getSourceRange(),
+                                              CallText);
+        }
+      }
+    }
+
+    if (const auto *SdlResultCheckFound =
+            Result.Nodes.getNodeAs<IfStmt>("sdl_error_check_negation")) {
+      const auto *Condition = SdlResultCheckFound->getCond();
+      const auto *UnaryOp =
+          dyn_cast<UnaryOperator>(Condition->IgnoreParenImpCasts());
+
+      if (UnaryOp) {
+        const auto *Call =
+            dyn_cast<CallExpr>(UnaryOp->getSubExpr()->IgnoreParenImpCasts());
+        if (Call) {
+          std::string CallText =
+              Lexer::getSourceText(
+                  CharSourceRange::getTokenRange(Call->getSourceRange()),
+                  *Result.SourceManager, Result.Context->getLangOpts())
+                  .str();
+
+          diag(SdlResultCheckFound->getIfLoc(),
+               "SDL3 functions that previously returned 0 for success now "
+               "return bool. remove '!' operator for the success branch")
+              << FixItHint::CreateReplacement(Condition->getSourceRange(),
+                                              CallText);
+        }
+      }
     }
 
     for (const auto &Migration : FunctionRenames) {
