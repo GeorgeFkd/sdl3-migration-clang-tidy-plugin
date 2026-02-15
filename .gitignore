@@ -1,6 +1,6 @@
 # Prerequisites
 *.d
-
+.cache
 # Compiled Object files
 *.slo
 *.lo
@@ -39,3 +39,5 @@
 
 # debug information files
 *.dwo
+
+build
