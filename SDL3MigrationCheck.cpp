@@ -15,6 +15,14 @@ using namespace clang;
 using namespace clang::tidy;
 using namespace clang::ast_matchers;
 
+static auto FnCallMatcher(StringRef FunctionName, StringRef BindName) {
+  return callExpr(callee(implicitCastExpr(
+                      hasCastKind(CK_FunctionToPointerDecay),
+                      hasSourceExpression(declRefExpr(
+                          to(functionDecl(hasName(FunctionName))))))))
+      .bind(BindName);
+}
+
 class SDLIncludeCallback : public PPCallbacks {
 public:
   SDLIncludeCallback(ClangTidyCheck &Check, const SourceManager &SM)
@@ -66,29 +74,6 @@ private:
   const SourceManager &SM;
 };
 static const char *FunctionRenames[][3] = {
-    // SDL_Audio
-    {"SDL_AudioStreamAvailable", "SDL_GetAudioStreamAvailable", ""},
-    {"SDL_AudioStreamClear", "SDL_ClearAudioStream", "now returns bool"},
-    {"SDL_AudioStreamFlush", "SDL_FlushAudioStream", "now returns bool"},
-    {"SDL_AudioStreamGet", "SDL_GetAudioStreamData", ""},
-    {"SDL_AudioStreamPut", "SDL_PutAudioStreamData", "now returns bool"},
-    {"SDL_FreeAudioStream", "SDL_DestroyAudioStream", ""},
-    {"SDL_LoadWAV_RW", "SDL_LoadWAV_IO", "now returns bool"},
-    {"SDL_MixAudioFormat", "SDL_MixAudio", "now returns bool"},
-    {"SDL_NewAudioStream", "SDL_CreateAudioStream", ""},
-    // SDL_atomic
-    // Atomic migrations
-    {"SDL_AtomicAdd", "SDL_AddAtomicInt", ""},
-    {"SDL_AtomicCAS", "SDL_CompareAndSwapAtomicInt", ""},
-    {"SDL_AtomicCASPtr", "SDL_CompareAndSwapAtomicPointer", ""},
-    {"SDL_AtomicGet", "SDL_GetAtomicInt", ""},
-    {"SDL_AtomicGetPtr", "SDL_GetAtomicPointer", ""},
-    {"SDL_AtomicLock", "SDL_LockSpinlock", ""},
-    {"SDL_AtomicSet", "SDL_SetAtomicInt", ""},
-    {"SDL_AtomicSetPtr", "SDL_SetAtomicPointer", ""},
-    {"SDL_AtomicTryLock", "SDL_TryLockSpinlock", ""},
-    {"SDL_AtomicUnlock", "SDL_UnlockSpinlock", ""},
-
     // Byte swap migrations
     {"SDL_SwapBE16", "SDL_Swap16BE", ""},
     {"SDL_SwapBE32", "SDL_Swap32BE", ""},
@@ -198,7 +183,265 @@ static const char *SymbolMigrations[][3] = {
     {"SDL_USEREVENT", "SDL_EVENT_USER", ""},
 };
 
-// Example check: SDL_Init replacement
+class SDL3AtomicCheck : public ClangTidyCheck {
+public:
+  SDL3AtomicCheck(StringRef Name, ClangTidyContext *Context)
+      : ClangTidyCheck(Name, Context) {}
+
+  const char *FuncRenames[10][3] = {
+      {"SDL_AtomicAdd", "SDL_AddAtomicInt", ""},
+      {"SDL_AtomicCAS", "SDL_CompareAndSwapAtomicInt", ""},
+      {"SDL_AtomicCASPtr", "SDL_CompareAndSwapAtomicPointer", ""},
+      {"SDL_AtomicGet", "SDL_GetAtomicInt", ""},
+      {"SDL_AtomicGetPtr", "SDL_GetAtomicPointer", ""},
+      {"SDL_AtomicLock", "SDL_LockSpinlock", ""},
+      {"SDL_AtomicSet", "SDL_SetAtomicInt", ""},
+      {"SDL_AtomicSetPtr", "SDL_SetAtomicPointer", ""},
+      {"SDL_AtomicTryLock", "SDL_TryLockSpinlock", ""},
+      {"SDL_AtomicUnlock", "SDL_UnlockSpinlock", ""}};
+
+  void registerMatchers(ast_matchers::MatchFinder *Finder) override {
+
+    // TODO: this probably does not work
+    for (const auto &Migration : FuncRenames) {
+      Finder->addMatcher(callExpr(callee(functionDecl(hasName(Migration[0]))))
+                             .bind(Migration[0]),
+                         this);
+    }
+  }
+
+  void check(const ast_matchers::MatchFinder::MatchResult &Result) override {
+    for (const auto &Migration : FuncRenames) {
+      if (const auto *Call = Result.Nodes.getNodeAs<CallExpr>(Migration[0])) {
+        std::string Message = std::string(Migration[0]) + "() is now " +
+                              Migration[1] + "() in SDL3";
+
+        if (strlen(Migration[2]) > 0) {
+          Message += " (" + std::string(Migration[2]) + ")";
+        }
+
+        diag(Call->getBeginLoc(), Message) << FixItHint::CreateReplacement(
+            Call->getCallee()->getSourceRange(), Migration[1]);
+        return;
+      }
+    }
+  }
+};
+
+class SDL3AudioCheck : public ClangTidyCheck {
+public:
+  SDL3AudioCheck(StringRef Name, ClangTidyContext *Context)
+      : ClangTidyCheck(Name, Context) {}
+
+  const char *FuncRenames[9][3] = {
+      {"SDL_AudioStreamAvailable", "SDL_GetAudioStreamAvailable", ""},
+      {"SDL_AudioStreamClear", "SDL_ClearAudioStream", "now returns bool"},
+      {"SDL_AudioStreamFlush", "SDL_FlushAudioStream", "now returns bool"},
+      {"SDL_AudioStreamGet", "SDL_GetAudioStreamData", ""},
+      {"SDL_AudioStreamPut", "SDL_PutAudioStreamData", "now returns bool"},
+      {"SDL_FreeAudioStream", "SDL_DestroyAudioStream", ""},
+      {"SDL_LoadWAV_RW", "SDL_LoadWAV_IO", "now returns bool"},
+      {"SDL_MixAudioFormat", "SDL_MixAudio", "now returns bool"},
+      {"SDL_NewAudioStream", "SDL_CreateAudioStream", ""},
+  };
+
+  void registerMatchers(ast_matchers::MatchFinder *Finder) override {
+    llvm::outs() << "Registering matchers\n";
+    Finder->addMatcher(
+        callExpr(callee(implicitCastExpr(
+                     hasCastKind(CK_FunctionToPointerDecay),
+                     hasSourceExpression(declRefExpr(
+                         to(functionDecl(hasName("SDL_AudioInit"))))))))
+            .bind("sdl_audio_init"),
+        this);
+
+    Finder->addMatcher(FnCallMatcher("SDL_FreeWav", "sdl_free_wav"), this);
+
+    Finder->addMatcher(
+        callExpr(callee(implicitCastExpr(
+                     hasCastKind(CK_FunctionToPointerDecay),
+                     hasSourceExpression(declRefExpr(
+                         to(functionDecl(hasName("SDL_AudioQuit"))))))))
+            .bind("sdl_audio_quit"),
+        this);
+    Finder->addMatcher(
+        callExpr(callee(implicitCastExpr(
+                     hasCastKind(CK_FunctionToPointerDecay),
+                     hasSourceExpression(declRefExpr(to(
+                         functionDecl(hasName("SDL_GetNumAudioDevices"))))))),
+                 hasArgument(0, integerLiteral().bind("device_type")))
+            .bind("get_num_audio_devices"),
+        this);
+    Finder->addMatcher(
+        callExpr(callee(implicitCastExpr(
+                     hasCastKind(CK_FunctionToPointerDecay),
+                     hasSourceExpression(declRefExpr(
+                         to(functionDecl(hasName("SDL_PauseAudioDevice"))))))),
+                 hasArgument(0, expr().bind("device_arg")),
+                 hasArgument(1, integerLiteral().bind("pause_value")))
+            .bind("sdl_pause_audio_device"),
+        this);
+    Finder->addMatcher(
+        callExpr(callee(implicitCastExpr(
+                     hasCastKind(CK_FunctionToPointerDecay),
+                     hasSourceExpression(declRefExpr(to(
+                         functionDecl(hasName("SDL_GetAudioDeviceStatus"))))))),
+                 hasArgument(0, expr().bind("device_arg")))
+            .bind("sdl_get_audio_device_status"),
+        this);
+
+    // TODO: this probs does not work
+    for (const auto &Migration : FuncRenames) {
+      Finder->addMatcher(callExpr(callee(functionDecl(hasName(Migration[0]))))
+                             .bind(Migration[0]),
+                         this);
+    }
+  }
+
+  void check(const ast_matchers::MatchFinder::MatchResult &Result) override {
+    if (const auto *Call = Result.Nodes.getNodeAs<CallExpr>("sdl_audio_init")) {
+      const auto *Callee = Call->getCallee();
+
+      diag(Call->getBeginLoc(),
+           "SDL_AudioInit() has been removed in SDL3. "
+           "Use SDL_InitSubSystem(SDL_INIT_AUDIO) instead, which properly "
+           "refcounts the subsystem. "
+           "To choose a specific audio driver, use the SDL_AUDIO_DRIVER hint")
+          << FixItHint::CreateReplacement(Call->getSourceRange(),
+                                          "SDL_InitSubSystem(SDL_INIT_AUDIO)");
+    }
+
+    if (const auto *Call = Result.Nodes.getNodeAs<CallExpr>("sdl_audio_quit")) {
+      const auto *Callee = Call->getCallee();
+
+      diag(Call->getBeginLoc(),
+           "SDL_AudioQuit() has been removed in SDL3. "
+           "Use SDL_QuitSubSystem(SDL_INIT_AUDIO) instead, which properly "
+           "refcounts the subsystem")
+          << FixItHint::CreateReplacement(Call->getSourceRange(),
+                                          "SDL_QuitSubSystem(SDL_INIT_AUDIO)");
+    }
+
+    if (const auto *Call =
+            Result.Nodes.getNodeAs<CallExpr>("get_num_audio_devices")) {
+      const auto *DeviceType =
+          Result.Nodes.getNodeAs<IntegerLiteral>("device_type");
+
+      if (DeviceType) {
+        llvm::APInt value = DeviceType->getValue();
+        std::string replacement;
+
+        if (value == 0) {
+          replacement = "SDL_GetAudioPlaybackDevices";
+        } else {
+          replacement = "SDL_GetAudioRecordingDevices";
+        }
+
+        diag(Call->getBeginLoc(),
+             "SDL_GetNumAudioDevices() has been removed in SDL3."
+             "Use %0(&num_devices) which returns an array of device IDs "
+             "instead of a count.\n"
+             "official docs:\n"
+             "int i,num_devices;\n"
+             "SDL_AudioDeviceID *devices = "
+             "SDL_GetAudioPlaybackDevices(&num_devices);\n"
+             "if (devices) {\n"
+             "\tfor (i = 0; i < num_devices; ++i) {\n"
+             "\t\tSDL_AudioDeviceID instance_id = devices[i];\n"
+             "\t\tSDL_Log('AudioDevice $' SDL_PRIu32 : $s', "
+             "instance_id,SDL_GetAudioDeviceName(instance_id));\n"
+             "\t}\n"
+             "\tSDL_free(devices);\n"
+             "}")
+            << replacement;
+      }
+    }
+
+    if (const auto *Call =
+            Result.Nodes.getNodeAs<CallExpr>("sdl_pause_audio_device")) {
+      const auto *PauseValue =
+          Result.Nodes.getNodeAs<IntegerLiteral>("pause_value");
+      const auto *DeviceArg = Result.Nodes.getNodeAs<Expr>("device_arg");
+
+      if (PauseValue && DeviceArg) {
+        llvm::APInt value = PauseValue->getValue();
+
+        std::string DeviceText =
+            Lexer::getSourceText(
+                CharSourceRange::getTokenRange(DeviceArg->getSourceRange()),
+                *Result.SourceManager, Result.Context->getLangOpts())
+                .str();
+
+        std::string replacement;
+        if (value == 0) {
+          // pause_on = 0 means unpause/resume
+          replacement = "SDL_ResumeAudioDevice(" + DeviceText + ")";
+          diag(Call->getBeginLoc(),
+               "SDL_PauseAudioDevice() no longer takes a second argument. "
+               "To unpause use SDL_ResumeAudioDevice()")
+              << FixItHint::CreateReplacement(Call->getSourceRange(),
+                                              replacement);
+        } else {
+          // pause_on = non-zero means pause
+          replacement = "SDL_PauseAudioDevice(" + DeviceText + ")";
+          diag(Call->getBeginLoc(),
+               "SDL_PauseAudioDevice() no longer takes a second argument. "
+               "To pause use SDL_PauseAudioDevice() "
+               "with one argument")
+              << FixItHint::CreateReplacement(Call->getSourceRange(),
+                                              replacement);
+        }
+      }
+    }
+
+    if (const auto *Call =
+            Result.Nodes.getNodeAs<CallExpr>("sdl_get_audio_device_status")) {
+      const auto *DeviceArg = Result.Nodes.getNodeAs<Expr>("device_arg");
+
+      if (DeviceArg) {
+        std::string DeviceText =
+            Lexer::getSourceText(
+                CharSourceRange::getTokenRange(DeviceArg->getSourceRange()),
+                *Result.SourceManager, Result.Context->getLangOpts())
+                .str();
+
+        std::string replacement = "SDL_AudioDevicePaused(" + DeviceText + ")";
+
+        diag(Call->getBeginLoc(),
+             "SDL_GetAudioDeviceStatus() has been removed in SDL3. "
+             "Use SDL_AudioDevicePaused() instead. "
+             "Now it returns bool (true if device is valid and paused) instead "
+             "of "
+             "SDL_AudioStatus enum")
+            << FixItHint::CreateReplacement(Call->getSourceRange(),
+                                            replacement);
+      }
+    }
+    for (const auto &Migration : FuncRenames) {
+      if (const auto *Call = Result.Nodes.getNodeAs<CallExpr>(Migration[0])) {
+        std::string Message = std::string(Migration[0]) + "() is now " +
+                              Migration[1] + "() in SDL3";
+
+        if (strlen(Migration[2]) > 0) {
+          Message += " (" + std::string(Migration[2]) + ")";
+        }
+
+        diag(Call->getBeginLoc(), Message) << FixItHint::CreateReplacement(
+            Call->getCallee()->getSourceRange(), Migration[1]);
+        return;
+      }
+    }
+
+    if (const auto *Call = Result.Nodes.getNodeAs<CallExpr>("sdl_free_wav")) {
+      const auto *Callee = Call->getCallee();
+
+      diag(Call->getBeginLoc(), "SDL_FreeWAV has been removed and calls can be "
+                                "replaced with SDL_free.")
+          << FixItHint::CreateReplacement(Callee->getSourceRange(), "SDL_free");
+    }
+  }
+};
+
 class SDL3InitCheck : public ClangTidyCheck {
 public:
   SDL3InitCheck(StringRef Name, ClangTidyContext *Context)
@@ -425,6 +668,8 @@ class SDL3MigrationModule : public ClangTidyModule {
 public:
   void addCheckFactories(ClangTidyCheckFactories &CheckFactories) override {
     CheckFactories.registerCheck<SDL3InitCheck>("sdl3-migration-init");
+    CheckFactories.registerCheck<SDL3AudioCheck>("sdl3-migration-audio");
+    CheckFactories.registerCheck<SDL3AtomicCheck>("sdl3-migration-atomic");
     // rename headers
     // rename macros
     // rename symbols

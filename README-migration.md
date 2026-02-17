@@ -209,25 +209,27 @@ SDL_PauseAudioDevice() no longer takes a second argument; it always pauses the d
 Audio devices, opened by SDL_OpenAudioDevice(), no longer start in a paused state, as they don't begin processing audio until a stream is bound.
 
 SDL_GetAudioDeviceStatus() has been removed; there is now SDL_AudioDevicePaused().
-
+<!--Skipped-->
 SDL_QueueAudio(), SDL_DequeueAudio, and SDL_ClearQueuedAudio and SDL_GetQueuedAudioSize() have been removed; an SDL_AudioStream bound to a device provides the exact same functionality.
 
+<!--Skipped-->
 APIs that use channel counts used to use a Uint8 for the channel; now they use int.
 
+<!--Skipped-->
 SDL_AudioSpec has been reduced; now it only holds format, channel, and sample rate. SDL_GetSilenceValueForFormat() can provide the information from the SDL_AudioSpec's removed `silence` field. SDL3 now manages the removed `samples` field; apps that want more control over device latency and throughput can force a newly-opened device's sample count with the SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES hint, but most apps should not risk messing with the defaults. The other SDL2 SDL_AudioSpec fields aren't relevant anymore.
-
+<!--I AM HERE NOW:-->
 SDL_GetAudioDeviceSpec() is removed; use SDL_GetAudioDeviceFormat() instead.
-
+<!--doable -->
 SDL_GetDefaultAudioInfo() is removed; SDL_GetAudioDeviceFormat() with SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK or SDL_AUDIO_DEVICE_DEFAULT_RECORDING. There is no replacement for querying the default device name; the string is no longer used to open devices, and SDL3 will migrate between physical devices on the fly if the system default changes, so if you must show this to the user, a generic name like "System default" is recommended.
-
+<!--doable-->
 SDL_MixAudioFormat() and SDL_MIX_MAXVOLUME have been removed in favour of SDL_MixAudio(), which now takes the audio format, and a float volume between 0.0 and 1.0.
-
+<!--doable-->
 SDL_FreeWAV has been removed and calls can be replaced with SDL_free.
 
 SDL_LoadWAV() is a proper function now and no longer a macro (but offers the same functionality otherwise).
 
 SDL_LoadWAV_IO() and SDL_LoadWAV() return an bool now, like most of SDL. They no longer return a pointer to an SDL_AudioSpec.
-
+<!--skipped-->
 SDL_AudioCVT interface has been removed, the SDL_AudioStream interface (for audio supplied in pieces) or the new SDL_ConvertAudioSamples() function (for converting a complete audio buffer in one call) can be used instead.
 
 Code that used to look like this:
@@ -277,6 +279,7 @@ All remaining `AUDIO_*` symbols have been renamed to `SDL_AUDIO_*` for API consi
 
 In SDL2, SDL_AudioStream would convert/resample audio data during input (via SDL_AudioStreamPut). In SDL3, it does this work when requesting audio (via SDL_GetAudioStreamData, which would have been SDL_AudioStreamGet in SDL2). The way you use an AudioStream is roughly the same, just be aware that the workload moved to a different phase.
 
+<!--skipped-->
 In SDL2, SDL_AudioStreamAvailable() returns 0 if passed a NULL stream. In SDL3, the equivalent SDL_GetAudioStreamAvailable() call returns -1 and sets an error string, which matches other audiostream APIs' behavior.
 
 In SDL2, SDL_AUDIODEVICEREMOVED events would fire for open devices with the `which` field set to the SDL_AudioDeviceID of the lost device, and in later SDL2 releases, would also fire this event with a `which` field of zero for unopened devices, to signify that the app might want to refresh the available device list. In SDL3, this event works the same, except it won't ever fire with a zero; in this case it'll return the physical device's SDL_AudioDeviceID. Any still-open SDL_AudioDeviceIDs generated from this device with SDL_OpenAudioDevice() will also fire a separate event.
