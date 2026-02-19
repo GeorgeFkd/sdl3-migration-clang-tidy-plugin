@@ -6,7 +6,10 @@
 *.lo
 *.o
 *.obj
+*.diff
 
+
+test_report.txt
 # Precompiled Headers
 *.gch
 *.pch
