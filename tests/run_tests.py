@@ -126,14 +126,14 @@ def apply_clang_tidy(plugin, source_file, check_filter, sdl2_flags):
     cmd = [
         "clang-tidy",
         f"--load={plugin}",
-        f"--checks=\"-*,{check_filter}\"",
+        f"--checks=-*,{check_filter}",
         "--fix",
         "--fix-errors",
         source_file,
         "--",
         "-std=c++17",
     ] + sdl2_flags
-    print(f"Running command: {cmd}")
+    print(f"Running command: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     return result.stderr.strip()
 
@@ -159,7 +159,7 @@ def diff_files(expected_file, actual_file):
 # Per-test orchestration
 # ---------------------------------------------------------------------------
 
-def run_test(name, before, after, plugin, sdl2_flags, sdl3_flags):
+def run_test(name, before, after, plugin, sdl2_flags, sdl3_flags, tmp_dir):
     """
     Execute all three checks for one test pair.
     Returns list of (label: str, passed: bool, detail: str).
@@ -184,23 +184,18 @@ def run_test(name, before, after, plugin, sdl2_flags, sdl3_flags):
         checks.append(("clang-tidy transforms before → after", False, "plugin .so not found"))
         return checks
 
-    tmp_dir = tempfile.mkdtemp()
-    try:
-        tmp_before = os.path.join(tmp_dir, os.path.basename(before))
-        shutil.copy2(before, tmp_before)
-        check_filter = f"sdl3-migration-{name}"
-        apply_clang_tidy(plugin, tmp_before, check_filter, sdl2_flags)
-        match, diff_text = diff_files(tmp_before, after)
-        diff_file = os.path.join(TESTS_DIR, f"test_{name}_transform.diff")
-        if not match:
-            with open(diff_file, "w") as f:
-                f.write(diff_text)
-        elif os.path.exists(diff_file):
-            os.unlink(diff_file)
-        checks.append(("clang-tidy transforms before → after", match, diff_text))
-    finally:
-        print("optionally can remove the tmp_dir after running tests")
-        # shutil.rmtree(tmp_dir)
+    tmp_before = os.path.join(tmp_dir, f"test_{name}_after_check.cpp")
+    shutil.copy2(before, tmp_before)
+    check_filter = f"sdl3-migration-{name}"
+    apply_clang_tidy(plugin, tmp_before, check_filter, sdl2_flags)
+    match, diff_text = diff_files(tmp_before, after)
+    diff_file = os.path.join(TESTS_DIR, f"test_{name}_transform.diff")
+    if not match:
+        with open(diff_file, "w") as f:
+            f.write(diff_text)
+    elif os.path.exists(diff_file):
+        os.unlink(diff_file)
+    checks.append(("clang-tidy transforms before → after", match, diff_text))
 
     return checks
 
@@ -278,11 +273,15 @@ def main():
     print(f"Tests  : {len(pairs)}")
     print()
 
+    tmp_dir = tempfile.mkdtemp()
     all_results = []
-    for name, before, after in pairs:
-        checks = run_test(name, before, after, plugin, sdl2_flags, sdl3_flags)
-        all_results.append((name, checks))
-        print_progress(name, checks)
+    try:
+        for name, before, after in pairs:
+            checks = run_test(name, before, after, plugin, sdl2_flags, sdl3_flags, tmp_dir)
+            all_results.append((name, checks))
+            print_progress(name, checks)
+    finally:
+        shutil.rmtree(tmp_dir)
 
     report = build_report(all_results)
     with open(REPORT_FILE, "w") as f:
