@@ -106,7 +106,6 @@ static const char *RemovedFunctions[][2] = {
     {"SDL_LockAudioDevice", ""},
     {"SDL_UnlockAudio", ""},
     {"SDL_UnlockAudioDevice", ""},
-    {"SDL_MixAudio", ""},
     {"SDL_QueueAudio", ""},
     {"SDL_DequeueAudio", ""},
     {"SDL_ClearAudioQueue", ""},
@@ -231,7 +230,7 @@ public:
       Finder->addMatcher(
           callExpr(callee(functionDecl(hasName(R[0])))).bind(R[0]), this);
     }
-    
+
     Finder->addMatcher(
         varDecl(hasType(asString("SDL_atomic_t"))).bind("sdl_atomic_t_var"),
         this);
@@ -269,9 +268,23 @@ static const char *AudioFuncRenames[][2] = {
     {"SDL_AudioStreamPut", "SDL_PutAudioStreamData"},
     {"SDL_FreeAudioStream", "SDL_DestroyAudioStream"},
     {"SDL_LoadWAV_RW", "SDL_LoadWAV_IO"},
-    {"SDL_MixAudioFormat", "SDL_MixAudio"},
-    {"SDL_NewAudioStream", "SDL_CreateAudioStream"},
 };
+
+static const char *AudioFormatMigrations[][3] = {
+    {"AUDIO_F32", "SDL_AUDIO_F32LE", ""},
+    {"AUDIO_F32LSB", "SDL_AUDIO_F32LE", ""},
+    {"AUDIO_F32MSB", "SDL_AUDIO_F32BE", ""},
+    {"AUDIO_F32SYS", "SDL_AUDIO_F32", ""},
+    {"AUDIO_S16", "SDL_AUDIO_S16LE", ""},
+    {"AUDIO_S16LSB", "SDL_AUDIO_S16LE", ""},
+    {"AUDIO_S16MSB", "SDL_AUDIO_S16BE", ""},
+    {"AUDIO_S16SYS", "SDL_AUDIO_S16", ""},
+    {"AUDIO_S32", "SDL_AUDIO_S32LE", ""},
+    {"AUDIO_S32LSB", "SDL_AUDIO_S32LE", ""},
+    {"AUDIO_S32MSB", "SDL_AUDIO_S32BE", ""},
+    {"AUDIO_S32SYS", "SDL_AUDIO_S32", ""},
+    {"AUDIO_S8", "SDL_AUDIO_S8", ""},
+    {"AUDIO_U8", "SDL_AUDIO_U8", ""}};
 
 class SDL3AudioCheck : public ClangTidyCheck {
 public:
@@ -287,7 +300,15 @@ public:
     Finder->addMatcher(FnCallMatcher("SDL_AudioInit", "sdl_audio_init"), this);
     Finder->addMatcher(FnCallMatcher("SDL_AudioQuit", "sdl_audio_quit"), this);
     Finder->addMatcher(FnCallMatcher("SDL_FreeWAV", "sdl_free_wav"), this);
-
+    Finder->addMatcher(
+        callExpr(callee(implicitCastExpr(
+                     hasCastKind(CK_FunctionToPointerDecay),
+                     hasSourceExpression(declRefExpr(
+                         to(functionDecl(hasName("SDL_MixAudioFormat"))))))),
+                 hasArgument(2, expr().bind("audio_format_arg")),
+                 hasArgument(4, expr().bind("audio_volume")))
+            .bind("sdl_mix_audio_format"),
+        this);
     Finder->addMatcher(
         callExpr(callee(implicitCastExpr(
                      hasCastKind(CK_FunctionToPointerDecay),
@@ -315,6 +336,25 @@ public:
                  hasArgument(0, expr().bind("device_arg")))
             .bind("sdl_get_audio_device_status"),
         this);
+
+    Finder->addMatcher(
+        callExpr(callee(implicitCastExpr(
+                     hasCastKind(CK_FunctionToPointerDecay),
+                     hasSourceExpression(declRefExpr(
+                         to(functionDecl(hasName("SDL_NewAudioStream"))))))),
+                 hasArgument(0, expr().bind("src_format")),
+                 hasArgument(1, expr().bind("src_channels")),
+                 hasArgument(2, expr().bind("src_rate")),
+                 hasArgument(3, expr().bind("dst_format")),
+                 hasArgument(4, expr().bind("dst_channels")),
+                 hasArgument(5, expr().bind("dst_rate")))
+            .bind("sdl_new_audio_stream"),
+        this);
+
+    for (const auto &S : AudioFormatMigrations) {
+      Finder->addMatcher(declRefExpr(to(namedDecl(hasName(S[0])))).bind(S[0]),
+                         this);
+    }
 
     for (const auto &R : AudioFuncRenames) {
       Finder->addMatcher(
@@ -414,6 +454,18 @@ public:
       return;
     }
 
+    for (const auto &S : AudioFormatMigrations) {
+      if (const auto *DRE = Result.Nodes.getNodeAs<DeclRefExpr>(S[0])) {
+        std::string Msg =
+            std::string(S[0]) + " has been renamed to " + S[1] + " in SDL3";
+        if (strlen(S[2]) > 0)
+          Msg += " (" + std::string(S[2]) + ")";
+        diag(DRE->getBeginLoc(), Msg)
+            << FixItHint::CreateReplacement(DRE->getSourceRange(), S[1]);
+        return;
+      }
+    }
+
     for (const auto &R : AudioFuncRenames) {
       if (const auto *Call = Result.Nodes.getNodeAs<CallExpr>(R[0])) {
         diag(Call->getBeginLoc(), "%0() has been renamed to %1() in SDL3")
@@ -421,6 +473,136 @@ public:
             << FixItHint::CreateReplacement(Call->getCallee()->getSourceRange(),
                                             R[1]);
         return;
+      }
+    }
+
+    if (const auto *Call =
+            Result.Nodes.getNodeAs<CallExpr>("sdl_mix_audio_format")) {
+      const auto *FormatArg = Result.Nodes.getNodeAs<Expr>("audio_format_arg");
+
+      std::string FormatText =
+          Lexer::getSourceText(
+              CharSourceRange::getTokenRange(FormatArg->getSourceRange()),
+              *Result.SourceManager, Result.Context->getLangOpts())
+              .str();
+
+      const auto *VolumeArg = Result.Nodes.getNodeAs<Expr>("audio_volume");
+      std::string VolumeText =
+          Lexer::getSourceText(
+              CharSourceRange::getTokenRange(VolumeArg->getSourceRange()),
+              *Result.SourceManager, Result.Context->getLangOpts())
+              .str();
+      if (VolumeText == "SDL_MIX_MAXVOLUME") {
+        VolumeText = "1.0f";
+      } else {
+        VolumeText = "(float)" + VolumeText + " / 128";
+      }
+      // Look up and replace audio format symbol
+      for (const auto &S : AudioFormatMigrations) {
+        if (FormatText == S[0]) {
+          FormatText = S[1];
+          break;
+        }
+      }
+
+      std::string Replacement = "SDL_MixAudio";
+
+      diag(Call->getBeginLoc(), "SDL_MixAudioFormat() has been removed in "
+                                "SDL3. Use SDL_MixAudio() instead and change the arguments appropriately")
+          << FixItHint::CreateReplacement(Call->getCallee()->getSourceRange(),
+                                          Replacement)
+          << FixItHint::CreateReplacement(FormatArg->getSourceRange(),
+                                          FormatText)
+          << FixItHint::CreateReplacement(VolumeArg->getSourceRange(),
+                                          VolumeText);
+    }
+    if (const auto *Call =
+            Result.Nodes.getNodeAs<CallExpr>("sdl_new_audio_stream")) {
+      // Extract argument text
+      const auto *SrcFormat = Result.Nodes.getNodeAs<Expr>("src_format");
+      const auto *SrcChannels = Result.Nodes.getNodeAs<Expr>("src_channels");
+      const auto *SrcRate = Result.Nodes.getNodeAs<Expr>("src_rate");
+      const auto *DstFormat = Result.Nodes.getNodeAs<Expr>("dst_format");
+      const auto *DstChannels = Result.Nodes.getNodeAs<Expr>("dst_channels");
+      const auto *DstRate = Result.Nodes.getNodeAs<Expr>("dst_rate");
+
+      std::string SrcFormatText =
+          Lexer::getSourceText(
+              CharSourceRange::getTokenRange(SrcFormat->getSourceRange()),
+              *Result.SourceManager, Result.Context->getLangOpts())
+              .str();
+      std::string SrcChannelsText =
+          Lexer::getSourceText(
+              CharSourceRange::getTokenRange(SrcChannels->getSourceRange()),
+              *Result.SourceManager, Result.Context->getLangOpts())
+              .str();
+      std::string SrcRateText =
+          Lexer::getSourceText(
+              CharSourceRange::getTokenRange(SrcRate->getSourceRange()),
+              *Result.SourceManager, Result.Context->getLangOpts())
+              .str();
+      std::string DstFormatText =
+          Lexer::getSourceText(
+              CharSourceRange::getTokenRange(DstFormat->getSourceRange()),
+              *Result.SourceManager, Result.Context->getLangOpts())
+              .str();
+      std::string DstChannelsText =
+          Lexer::getSourceText(
+              CharSourceRange::getTokenRange(DstChannels->getSourceRange()),
+              *Result.SourceManager, Result.Context->getLangOpts())
+              .str();
+      std::string DstRateText =
+          Lexer::getSourceText(
+              CharSourceRange::getTokenRange(DstRate->getSourceRange()),
+              *Result.SourceManager, Result.Context->getLangOpts())
+              .str();
+
+      for (const auto &S : AudioFormatMigrations) {
+        if (SrcFormatText == S[0]) {
+          SrcFormatText = S[1];
+        }
+        if (DstFormatText == S[0]) {
+          DstFormatText = S[1];
+        }
+      }
+      // Find the statement containing this call
+      auto Parents = Result.Context->getParents(*Call);
+      const Stmt *ContainingStmt = nullptr;
+
+      while (!Parents.empty()) {
+        const auto &Parent = Parents[0];
+        if (const auto *S = Parent.get<Stmt>()) {
+          if (isa<DeclStmt>(S) || isa<Expr>(S)) {
+            ContainingStmt = S;
+            auto NextParents = Result.Context->getParents(Parent);
+            if (!NextParents.empty() && NextParents[0].get<CompoundStmt>()) {
+              break;
+            }
+          }
+        }
+        Parents = Result.Context->getParents(Parent);
+      }
+
+      if (ContainingStmt) {
+        SourceLocation StmtBegin = ContainingStmt->getBeginLoc();
+
+        std::string VarDecls = "SDL_AudioSpec srcspec = {" + SrcFormatText +
+                               ", " + SrcChannelsText + ", " + SrcRateText +
+                               "};\n"
+                               "  SDL_AudioSpec dstspec = {" +
+                               DstFormatText + ", " + DstChannelsText + ", " +
+                               DstRateText +
+                               "};\n"
+                               "  ";
+
+        std::string Replacement = "SDL_CreateAudioStream(&srcspec, &dstspec)";
+
+        diag(Call->getBeginLoc(),
+             "SDL_NewAudioStream() has been replaced in SDL3. "
+             "Use SDL_CreateAudioStream() with SDL_AudioSpec structures")
+            << FixItHint::CreateInsertion(StmtBegin, VarDecls)
+            << FixItHint::CreateReplacement(Call->getSourceRange(),
+                                            Replacement);
       }
     }
   }
