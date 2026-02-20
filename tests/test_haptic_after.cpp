@@ -1,16 +1,16 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_haptic.h>
 
-void test_haptic() {
+int main() {
     SDL_Haptic *haptic = SDL_OpenHaptic(0);
 
     SDL_InitHapticRumble(haptic);
     SDL_PlayHapticRumble(haptic, 0.5f, 1000);
     SDL_StopHapticRumble(haptic);
 
-    int axes     = SDL_GetNumHapticAxes(haptic);
-    int effects  = SDL_GetMaxHapticEffects(haptic);
-    int playing  = SDL_GetMaxHapticEffectsPlaying(haptic);
+    int axes = SDL_GetNumHapticAxes(haptic);
+    int effects = SDL_GetMaxHapticEffects(haptic);
+    int playing = SDL_GetMaxHapticEffectsPlaying(haptic);
     unsigned cap = SDL_GetHapticFeatures(haptic);
 
     SDL_SetHapticGain(haptic, 50);

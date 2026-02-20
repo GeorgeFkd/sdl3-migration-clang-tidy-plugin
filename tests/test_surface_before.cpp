@@ -1,6 +1,6 @@
 #include <SDL2/SDL.h>
 
-void test_surface() {
+int main(){
     SDL_Surface *src = SDL_CreateRGBSurfaceWithFormat(0, 640, 480, 32,
                                                        SDL_PIXELFORMAT_RGBA8888);
     SDL_Surface *dst = SDL_CreateRGBSurfaceWithFormat(0, 640, 480, 32,

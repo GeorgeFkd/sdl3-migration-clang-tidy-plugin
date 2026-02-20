@@ -1,7 +1,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_joystick.h>
 
-void test_joystick() {
+int main() {
     SDL_Joystick *joy = SDL_JoystickOpen(0);
     const char *name  = SDL_JoystickName(joy);
     SDL_JoystickID id = SDL_JoystickInstanceID(joy);

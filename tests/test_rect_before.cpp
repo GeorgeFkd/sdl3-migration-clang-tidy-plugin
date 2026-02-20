@@ -1,6 +1,6 @@
 #include <SDL2/SDL.h>
 
-void test_rect() {
+int main(){
     SDL_Rect a = {0, 0, 100, 100};
     SDL_Rect b = {50, 50, 100, 100};
     SDL_Rect result;

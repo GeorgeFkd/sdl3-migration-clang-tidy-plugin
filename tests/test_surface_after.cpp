@@ -1,13 +1,11 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_surface.h>
 
-void test_surface() {
-    SDL_Surface *src = SDL_CreateSurface(640, 480,
-                                                       SDL_PIXELFORMAT_RGBA8888);
-    SDL_Surface *dst = SDL_CreateSurface(640, 480,
-                                                       SDL_PIXELFORMAT_RGBA8888);
+int main() {
+    SDL_Surface *src = SDL_CreateSurface(640, 480, SDL_PIXELFORMAT_RGBA8888);
+    SDL_Surface *dst = SDL_CreateSurface(640, 480, SDL_PIXELFORMAT_RGBA8888);
 
-    SDL_BlitSurfaceScaled(src, nullptr, dst, nullptr,SDL_SCALEMODE_LINEAR);
+    SDL_BlitSurfaceScaled(src, nullptr, dst, nullptr, SDL_SCALEMODE_LINEAR);
     SDL_BlitSurface(src, nullptr, dst, nullptr);
 
     SDL_Rect clip;

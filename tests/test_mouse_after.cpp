@@ -1,6 +1,6 @@
 #include <SDL3/SDL.h>
 
-void test_mouse() {
+int main() {
     SDL_Cursor *cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT);
     SDL_SetCursor(cursor);
     SDL_DestroyCursor(cursor);
