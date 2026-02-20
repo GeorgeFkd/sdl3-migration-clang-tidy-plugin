@@ -231,6 +231,10 @@ public:
       Finder->addMatcher(
           callExpr(callee(functionDecl(hasName(R[0])))).bind(R[0]), this);
     }
+    
+    Finder->addMatcher(
+        varDecl(hasType(asString("SDL_atomic_t"))).bind("sdl_atomic_t_var"),
+        this);
   }
 
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override {
@@ -242,6 +246,14 @@ public:
                                             R[1]);
         return;
       }
+    }
+
+    if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>("sdl_atomic_t_var")) {
+      diag(Var->getLocation(),
+           "SDL_atomic_t has been renamed to SDL_AtomicInt in SDL3")
+          << FixItHint::CreateReplacement(
+                 Var->getTypeSourceInfo()->getTypeLoc().getSourceRange(),
+                 "SDL_AtomicInt");
     }
   }
 };
