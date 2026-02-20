@@ -21,6 +21,7 @@ import tempfile
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORT_FILE = os.path.join(TESTS_DIR, "test_report.txt")
+CLANG_FORMAT_FILE = os.path.join(TESTS_DIR, ".clang-format")
 
 _GREEN = "\033[32m"
 _RED   = "\033[31m"
@@ -138,6 +139,21 @@ def apply_clang_tidy(plugin, source_file, check_filter, sdl2_flags):
     return result.stderr.strip()
 
 
+def apply_clang_format(file_path):
+    """
+    Run clang-format -i on file_path using the tests/.clang-format config.
+    Returns (success: bool, stderr: str).
+    """
+    cmd = [
+        "clang-format",
+        f"--style=file:{CLANG_FORMAT_FILE}",
+        "-i",
+        file_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.returncode == 0, result.stderr.strip()
+
+
 def diff_files(expected_file, actual_file):
     """Return (files_match: bool, unified_diff_str: str)."""
     with open(expected_file) as f:
@@ -188,6 +204,8 @@ def run_test(name, before, after, plugin, sdl2_flags, sdl3_flags, tmp_dir):
     shutil.copy2(before, tmp_before)
     check_filter = f"sdl3-migration-{name}"
     apply_clang_tidy(plugin, tmp_before, check_filter, sdl2_flags)
+    apply_clang_format(tmp_before)
+    apply_clang_format(after)
     match, diff_text = diff_files(tmp_before, after)
     diff_file = os.path.join(TESTS_DIR, f"test_{name}_transform.diff")
     if not match:
