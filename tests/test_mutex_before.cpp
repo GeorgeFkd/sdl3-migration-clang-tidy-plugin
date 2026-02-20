@@ -1,6 +1,6 @@
 #include <SDL2/SDL.h>
 
-void test_mutex() {
+int main(){
     SDL_mutex *mutex = SDL_CreateMutex();
     SDL_LockMutex(mutex);
     SDL_UnlockMutex(mutex);

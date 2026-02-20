@@ -1400,6 +1400,11 @@ static const char *MutexFuncRenames[][2] = {
     {"SDL_SemWaitTimeout", "SDL_WaitSemaphoreTimeout"},
 };
 
+static const char *MutexTypeMigrations[][2] = {
+    {"SDL_mutex *", "SDL_Mutex *"},
+    {"SDL_cond *", "SDL_Condition *"},
+    {"SDL_sem *", "SDL_Semaphore *"}};
+
 class SDL3MutexCheck : public ClangTidyCheck {
 public:
   SDL3MutexCheck(StringRef Name, ClangTidyContext *Context)
@@ -1411,6 +1416,11 @@ public:
   }
 
   void registerMatchers(ast_matchers::MatchFinder *Finder) override {
+
+    for (const auto &T : MutexTypeMigrations) {
+      Finder->addMatcher(varDecl(hasType(asString(T[0]))).bind(T[0]), this);
+    }
+
     for (const auto &R : MutexFuncRenames)
       Finder->addMatcher(
           callExpr(callee(functionDecl(hasName(R[0])))).bind(R[0]), this);
@@ -1423,6 +1433,17 @@ public:
             << R[0] << R[1]
             << FixItHint::CreateReplacement(Call->getCallee()->getSourceRange(),
                                             R[1]);
+        return;
+      }
+    }
+
+    for (const auto &T : MutexTypeMigrations) {
+      if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>(T[0])) {
+        diag(Var->getLocation(),
+             std::string(T[0]) + " has been renamed to " + T[1] + " in SDL3")
+            << FixItHint::CreateReplacement(
+                   Var->getTypeSourceInfo()->getTypeLoc().getSourceRange(),
+                   T[1]);
         return;
       }
     }
