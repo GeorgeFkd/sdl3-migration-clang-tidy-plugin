@@ -49,6 +49,8 @@ public:
       std::string Replacement;
       if (FileName == "SDL2/SDL.h") {
         Replacement = "SDL3/SDL.h";
+      } else if (FileName == "SDL2/SDL_gamecontroller.h") {
+        Replacement = "SDL3/SDL_gamepad.h";
       } else if (FileName.starts_with("SDL2/")) {
         Replacement = "SDL3/" + FileName.substr(5).str();
       } else if (FileName == "SDL.h") {
@@ -508,7 +510,8 @@ public:
       std::string Replacement = "SDL_MixAudio";
 
       diag(Call->getBeginLoc(), "SDL_MixAudioFormat() has been removed in "
-                                "SDL3. Use SDL_MixAudio() instead and change the arguments appropriately")
+                                "SDL3. Use SDL_MixAudio() instead and change "
+                                "the arguments appropriately")
           << FixItHint::CreateReplacement(Call->getCallee()->getSourceRange(),
                                           Replacement)
           << FixItHint::CreateReplacement(FormatArg->getSourceRange(),
@@ -940,6 +943,10 @@ public:
   }
 
   void registerMatchers(ast_matchers::MatchFinder *Finder) override {
+
+    Finder->addMatcher(varDecl(hasType(asString("SDL_GameController *")))
+                           .bind("sdl_game_controller_var"),
+                       this);
     for (const auto &R : GamepadFuncRenames)
       Finder->addMatcher(
           callExpr(callee(functionDecl(hasName(R[0])))).bind(R[0]), this);
@@ -954,6 +961,14 @@ public:
   }
 
   void check(const ast_matchers::MatchFinder::MatchResult &Result) override {
+    if (const auto *Var =
+            Result.Nodes.getNodeAs<VarDecl>("sdl_game_controller_var")) {
+      diag(Var->getLocation(),
+           "SDL_GameController has been renamed to SDL_Gamepad in SDL3")
+          << FixItHint::CreateReplacement(
+                 Var->getTypeSourceInfo()->getTypeLoc().getSourceRange(),
+                 "SDL_Gamepad *");
+    }
     for (const auto &R : GamepadFuncRenames) {
       if (const auto *Call = Result.Nodes.getNodeAs<CallExpr>(R[0])) {
         diag(Call->getBeginLoc(), "%0() has been renamed to %1() in SDL3")
